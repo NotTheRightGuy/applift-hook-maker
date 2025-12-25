@@ -2,7 +2,6 @@
 import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
-import { getImportsForContent } from "../../resolveImports";
 
 // Custom QuickPick for file navigation
 const pickFile = async (currentDir: string): Promise<string | undefined> => {
@@ -122,20 +121,7 @@ export const appendContentToFile = async (
             fileContent = fs.readFileSync(targetPath, "utf8");
         }
 
-        const newImports = await getImportsForContent(
-            content,
-            targetPath,
-            fileContent,
-            knownLocations
-        );
-        let finalContent = fileContent;
-
-        if (newImports.length > 0) {
-            finalContent =
-                newImports.join("\n") + "\n\n" + finalContent;
-        }
-
-        finalContent += "\n\n" + content;
+        const finalContent = fileContent + "\n\n" + content;
 
         fs.writeFileSync(targetPath, finalContent);
         vscode.window.showInformationMessage(

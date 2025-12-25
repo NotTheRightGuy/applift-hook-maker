@@ -75,7 +75,7 @@ export function getOperationsFromSpec(spec: any) {
 }
 
 export function processSelectedOperations(selectedItems: any[], fullSpec: any) {
-    const batchModelsInput: { featureName: string; responseSchema?: string; paramsSchema?: string }[] = [];
+    const batchModelsInput: { featureName: string; responseSchema?: string; paramsSchema?: string; wrapperArgs?: string }[] = [];
     const processedItems: any[] = []; 
 
     for (const selected of selectedItems) {
@@ -206,11 +206,14 @@ export function processSelectedOperations(selectedItems: any[], fullSpec: any) {
                 }
         }
 
-        batchModelsInput.push({
-            featureName,
-            responseSchema: responseSchemaStr,
-            paramsSchema: paramsSchemaStr
-        });
+        if (featureName) {
+            batchModelsInput.push({
+                featureName,
+                responseSchema: responseSchemaStr,
+                paramsSchema: paramsSchemaStr,
+                wrapperArgs
+            });
+        }
 
         processedItems.push({
                 featureName,

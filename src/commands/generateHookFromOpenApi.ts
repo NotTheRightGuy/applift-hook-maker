@@ -92,7 +92,10 @@ export async function generateHookFromOpenApiCommand(context: vscode.ExtensionCo
         for (const item of processedItems) {
             const { featureName, method, path, responseSchemaStr, paramsSchemaStr, wrapperArgs } = item;
                 
-            const hookType = (method.toLowerCase() === 'get') ? 'useQuery' : 'useMutation';
+            let hookType = (method.toLowerCase() === 'get') ? 'useQuery' : 'useMutation';
+            if (hookType === 'useQuery' && wrapperArgs === 'WithRecordResponse') {
+                hookType = 'useInfiniteQuery';
+            }
             
             let adjustedPath = path;
             if (adjustedPath.startsWith("/api")) {
@@ -119,33 +122,22 @@ export async function generateHookFromOpenApiCommand(context: vscode.ExtensionCo
         }
 
         // Append Logic with Formatting
-        // Track known symbols for resolution
-        const knownLocations: Record<string, string> = {};
-
+        
         if (generatedResults.model.length > 0) {
             const formatted = await formatCode(generatedResults.model.join("\n\n"));
-            const modelPath = await appendToFile(context, formatted, "Model/Types", "lastPath_model");
-            
-            if (modelPath) {
-                // Heuristic: Assuming standard naming conventions for batch models
-                for (const item of batchModelsInput) {
-                     const pascalName = item.featureName.charAt(0).toUpperCase() + item.featureName.slice(1);
-                     if (item.responseSchema) {knownLocations[`${pascalName}Response`] = modelPath;}
-                     if (item.paramsSchema) {knownLocations[`${pascalName}Variables`] = modelPath;}
-                }
-            }
+            await appendToFile(context, formatted, "Model/Types", "lastPath_model");
         }
         if (generatedResults.api.length > 0) {
             const formatted = await formatCode(generatedResults.api.join("\n\n"));
-            await appendToFile(context, formatted, "API Function", "lastPath_api", knownLocations);
+            await appendToFile(context, formatted, "API Function", "lastPath_api");
         }
         if (generatedResults.queryKey.length > 0) {
             const formatted = await formatCode(generatedResults.queryKey.join("\n\n"));
-            await appendToFile(context, formatted, "Query Key", "lastPath_queryKey", knownLocations);
+            await appendToFile(context, formatted, "Query Key", "lastPath_queryKey");
         }
         if (generatedResults.hook.length > 0) {
             const formatted = await formatCode(generatedResults.hook.join("\n\n"));
-            await appendToFile(context, formatted, "Hook", "lastPath_hook", knownLocations);
+            await appendToFile(context, formatted, "Hook", "lastPath_hook");
         }
 
     } catch (e) {

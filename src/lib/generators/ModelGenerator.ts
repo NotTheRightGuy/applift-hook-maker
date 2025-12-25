@@ -140,7 +140,7 @@ export async function generateModels(props: GenerateFilesProps, pascalName: stri
 }
 
 export async function generateBatchModels(
-    items: { featureName: string; responseSchema?: string; paramsSchema?: string }[]
+    items: { featureName: string; responseSchema?: string; paramsSchema?: string; wrapperArgs?: string }[]
 ): Promise<string> {
     const { generateTypesFromMultipleSchemas } = await import("../generateType.js");
     const sources: { name: string; schema: string }[] = [];
@@ -149,8 +149,9 @@ export async function generateBatchModels(
         const pascalName = item.featureName.charAt(0).toUpperCase() + item.featureName.slice(1);
         
         if (item.responseSchema) {
+            const modelName = item.wrapperArgs ? `${pascalName}Data` : `${pascalName}Response`;
             sources.push({
-                name: `${pascalName}Response`,
+                name: modelName,
                 schema: item.responseSchema
             });
         }

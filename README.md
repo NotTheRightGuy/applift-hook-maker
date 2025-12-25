@@ -1,119 +1,68 @@
-# React Query Hook Builder 
+# React Query Hook Builder
 
-A VS Code extension that accelerates React Query development by automatically generating TypeScript types, API functions, query keys, and React hooks from API endpoint specifications.
+A powerful VS Code extension designed to streamline your React Query development workflow. It automates the generation of type-safe hooks, API functions, query keys, and TypeScript references directly from OpenAPI specifications or manual inputs.
 
 ## Features
 
-This extension helps developers quickly scaffold React Query hooks with proper TypeScript typing by:
+### 🚀 OpenAPI / Swagger Support
+- **Import from URL or JSON**: Easily load your API specification by providing a URL or pasting the JSON content directly.
+- **Batch Generation**: Select multiple API endpoints at once to generate hooks in bulk.
+- **Smart Detection**:
+  - Automatically maps `GET` requests to `useQuery`.
+  - Maps `POST`, `PUT`, `DELETE` to `useMutation`.
+  - **Pagination Support**: Detects paginated responses (e.g., fields like `totalRecords`) and generates `useInfiniteQuery` with mostly complete `getNextPageParam` logic.
+- **Type Generation**: Generates comprehensive TypeScript interfaces for:
+  - **Request Variables**: Parameters (path/query) and request bodies.
+  - **Response Models**: Strongly typed response objects, handling deeply nested structures and extracting cleaner names (e.g., `UserData` vs generic `Response`).
 
-- **Automatic TypeScript Type Generation**: Uses Quicktype to generate TypeScript interfaces from example JSON responses
-- **Smart Response Type Detection**: Automatically detects and handles:
-  - Standard API response wrappers (`WithResponse<T>`)
-  - Paginated responses (`WithCustomRecordResponse<K, T>`)
-  - Custom response structures
-- **Complete Hook Scaffolding**: Generates all necessary code components:
-  - TypeScript type definitions (request/response models)
-  - API functions with proper error handling
-  - Query keys using factory pattern
-  - React hooks (`useQuery`, `useMutation`, `useInfiniteQuery`)
-- **Intelligent Variable Extraction**: Automatically extracts variables from:
-  - URL path parameters (e.g., `${audienceId}`)
-  - Request body/query parameters
-- **Flexible JSON Parsing**: Supports relaxed JSON formats including:
-  - Comments
-  - Trailing commas
-  - Unquoted keys
-- **File Management**: Remembers your last-used files for quick appending of generated code
+### 🛠️ Manual Hook Generation
+- **Generate Hook from Specs**: Don't have an OpenAPI spec? No problem.
+  - Interactively provide the Feature Name, API URL, and HTTP Method.
+  - Paste an example JSON response to automatically infer and generate TypeScript interfaces.
+
+### 📦 Modular Code Generation
+The extension generates four distinct parts for each hook, which can be placed in separate files or combined as needed:
+1.  **Models/Types**: TypeScript interfaces for the API response and variables.
+2.  **API Function**: An `axios`-based async function to make the network request.
+3.  **Query Keys**: A standardized factory object for React Query keys (supporting easy invalidation and scoping).
+4.  **Hook**: The custom React hook (`useUser`, `useCreateUser`, etc.) wrapping the React Query logic.
+
+### ⚡ Developer Experience
+- **Append to Files**: Seamlessly append generated code to existing standard files (e.g., adding a new type to `types.ts` or a new hook to `useHooks.ts`).
+- **History Support**: Remembers your recently used OpenAPI URLs for quick access.
+- **Formatting**: Automatically formats generated code using a built-in Prettier implementation to match standard style guides.
 
 ## Usage
 
-### Basic Workflow
+### Method 1: Generate from OpenAPI (Recommended)
+1.  Open the Command Palette (`Cmd+Shift+P` or `Ctrl+Shift+P`).
+2.  Run **"React Query Hook Builder: Generate Hook from OpenAPI Spec"**.
+3.  **Source**: Select "Enter new OpenAPI Spec URL or JSON content" (or pick from history).
+4.  **Select Endpoints**: Choose one or more operations from the list.
+5.  **Destination**: For each component (Models, API, Keys, Hooks), choose to:
+    - Select an existing file to append to.
+    - Create a new file.
+    - (The extension will remember your last used file for faster re-runs).
 
-1. Open the Command Palette (`Cmd+Shift+P` on macOS or `Ctrl+Shift+P` on Windows/Linux)
-2. Type "Generate API Hook" and select the command
-3. Follow the interactive prompts:
-   - **Feature Name**: Enter the feature name (e.g., `getAudienceList`)
-   - **HTTP Method**: Select from GET, POST, PUT, DELETE, or PATCH
-   - **API Endpoint**: Enter the endpoint URL (e.g., `/api/v1/audience/${audienceId}`)
-   - **Example Response**: Paste a sample JSON response from the API
-   - **Params/Payload**: Enter example parameters or request payload (JSON)
-   - **Hook Type**: Select `useQuery`, `useMutation`, or `useInfiniteQuery`
-4. The extension generates four code snippets and prompts you to append them to your project files:
-   - TypeScript models/types
-   - API function
-   - Query key definition
-   - React hook
-
-### Example
-
-**Input:**
-- Feature Name: `getAudienceList`
-- HTTP Method: `GET`
-- API Endpoint: `/api/v1/audience/list`
-- Example Response:
-```json
-{
-  "success": true,
-  "data": {
-    "totalRecords": 100,
-    "filteredRecords": 10,
-    "audienceList": [
-      {
-        "id": 1,
-        "name": "Test Audience",
-        "status": "active"
-      }
-    ]
-  }
-}
-```
-- Hook Type: `useQuery`
-
-**Generated Code:**
-
-TypeScript types, API function with cancellation support, query key factory, and a typed React hook ready to use in your application.
+### Method 2: Generate from Manual Specs
+1.  Open the Command Palette.
+2.  Run **"React Query Hook Builder: Generate Hook from specs"**.
+3.  Follow the prompts:
+    - **Feature Name**: e.g., `TodoList`.
+    - **Method**: `GET`, `POST`, etc.
+    - **API URL**: e.g., `/api/todos`.
+    - **Example Response**: Paste a JSON sample from your backend to generate types.
 
 ## Requirements
-
-This extension is designed for React projects using:
-- TypeScript
-- Tanstack React Query (React Query v4+)
-- Axios for HTTP requests
-
-Your project should have the following patterns:
-- `WithResponse<T>` type wrapper for standard API responses
-- `WithCustomRecordResponse<K, T>` type for paginated responses
-- `useInvalidateCommonQueries()` hook for cache invalidation (for mutations)
-- `showSnackbarOnApiError()` utility for error display
+- VS Code `^1.90.0`
+- A project using `react-query` (TanStack Query) and `axios`. generated code assumes standard `axios` and `react-query` imports.
 
 ## Extension Settings
-
-This extension does not contribute any VS Code settings. All configuration is done through the interactive prompts.
-
-## Tips
-
-- **Reuse Last Files**: The extension remembers your last-used files for each code type (models, API, query keys, hooks), making it faster to generate multiple hooks
-- **URL Parameters**: Use template literal syntax `${variableName}` in your API URL to automatically extract path parameters
-- **Relaxed JSON**: You can paste JSON with comments or trailing commas - the extension will parse it correctly
-- **Complex Objects**: The extension handles nested objects and arrays in both responses and request parameters
+This extension currently does not contribute any global settings. It relies on interaction during generation to determine file paths.
 
 ## Known Issues
-
-- The extension assumes specific naming patterns and helper functions (`WithResponse`, `showSnackbarOnApiError`, etc.) used in the React Query Hook Builder codebase
-- Generated code may need minor adjustments for projects with different architectural patterns
-
-## Release Notes
-
-### 0.0.1
-
-Initial release of React Query Hook Builder featuring:
-- Interactive API hook generation
-- Automatic TypeScript type generation from JSON
-- Support for useQuery, useMutation, and useInfiniteQuery
-- Smart response type detection (standard, paginated, custom)
-- URL and parameter variable extraction
-- File memory for quick code appending
+- The extension assumes a standard response wrapper pattern (e.g. `{ data: T, success: boolean }`) for some heuristic optimizations, but generally supports standard OpenAPI schemas.
+- Automatic import resolution is currently disabled; you may need to add imports (e.g., `import { useQuery } from '@tanstack/react-query'`) to your files manually if they are not already present.
 
 ---
-
 **Enjoy faster React Query development!**
