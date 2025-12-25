@@ -336,6 +336,21 @@ export function activate(context: vscode.ExtensionContext) {
                         responseSchemaStr = JSON.stringify(fullSchema);
                     }
                 }
+                
+                let exampleResponse = "";
+                if (!responseSchemaStr) {
+                    const selection = await vscode.window.showQuickPick(
+                        ["Yes", "No"],
+                        { placeHolder: "No response schema found. Paste example JSON response?" }
+                    );
+                    
+                    if (selection === "Yes") {
+                        exampleResponse = await vscode.window.showInputBox({
+                            prompt: "Enter example JSON response",
+                            ignoreFocusOut: true
+                        }) || "";
+                    }
+                }
 
                 // Determine Params Schema
                 let paramsSchemaStr: string | undefined;
@@ -421,7 +436,7 @@ export function activate(context: vscode.ExtensionContext) {
                     featureName,
                     methodType: method.toUpperCase(),
                     apiUrl: path,
-                    exampleResponse: "",
+                    exampleResponse: exampleResponse,
                     params: "",
                     responseSchema: responseSchemaStr,
                     paramsSchema: paramsSchemaStr,
