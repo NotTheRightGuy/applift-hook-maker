@@ -5,8 +5,8 @@ import { generateFiles } from "./lib/generateFiles";
 import { getImportsForContent } from "./resolveImports";
 
 export function activate(context: vscode.ExtensionContext) {
-    console.log('Applift Hook Maker is now active!');
-    
+    console.log("Applift Hook Maker is now active!");
+
     let disposable = vscode.commands.registerCommand(
         "extension.generateHook",
         async () => {
@@ -37,7 +37,7 @@ export function activate(context: vscode.ExtensionContext) {
 
             // 2. Select Hook Type (moved up or keep here, user order was mixed in existing file)
             // Existing file had hookType selection at the end. I'll keep it there.
-            
+
             // Re-ordering to match logical flow if needed, but keeping existing is fine.
             // Existing flows: Feature -> Method -> URL -> Response -> Params -> HookType.
 
@@ -66,34 +66,51 @@ export function activate(context: vscode.ExtensionContext) {
                     apiUrl,
                     exampleResponse: exampleResponse || "",
                     params: headers || "",
-                    hookType
+                    hookType,
                 });
 
                 // Helper to ask and append
-                const appendToFile = async (content: string, label: string, stateKey: string) => {
+                const appendToFile = async (
+                    content: string,
+                    label: string,
+                    stateKey: string
+                ) => {
                     if (!content || !content.trim()) return;
-                    
+
                     let targetPath: string | undefined;
-                    const lastPath = context.workspaceState.get<string>(stateKey);
+                    const lastPath =
+                        context.workspaceState.get<string>(stateKey);
 
                     // If we have a valid last path, ask user if they want to reuse it
                     if (lastPath) {
                         try {
-                            const fs = require('fs');
+                            const fs = require("fs");
                             if (fs.existsSync(lastPath)) {
-                                const useLast = { label: `$(history) Use last used: ${vscode.workspace.asRelativePath(lastPath)}`, path: lastPath };
-                                const pickNew = { label: `$(folder-opened) Choose new file...`, path: undefined };
-                                
-                                const selection = await vscode.window.showQuickPick([useLast, pickNew], {
-                                    placeHolder: `Select destination for ${label}`,
-                                    ignoreFocusOut: true
-                                });
+                                const useLast = {
+                                    label: `$(history) Use last used: ${vscode.workspace.asRelativePath(
+                                        lastPath
+                                    )}`,
+                                    path: lastPath,
+                                };
+                                const pickNew = {
+                                    label: `$(folder-opened) Choose new file...`,
+                                    path: undefined,
+                                };
+
+                                const selection =
+                                    await vscode.window.showQuickPick(
+                                        [useLast, pickNew],
+                                        {
+                                            placeHolder: `Select destination for ${label}`,
+                                            ignoreFocusOut: true,
+                                        }
+                                    );
 
                                 if (selection?.path) {
                                     targetPath = selection.path;
                                 } else if (!selection) {
                                     // User cancelled quick pick
-                                    return; 
+                                    return;
                                 }
                             }
                         } catch (e) {
@@ -103,54 +120,94 @@ export function activate(context: vscode.ExtensionContext) {
 
                     // If no target path set (either no history or user chose 'new'), show dialog
                     if (!targetPath) {
-                        const defaultUri = lastPath ? vscode.Uri.file(lastPath) : undefined;
+                        const defaultUri = lastPath
+                            ? vscode.Uri.file(lastPath)
+                            : undefined;
                         const fileUris = await vscode.window.showOpenDialog({
                             canSelectFiles: true,
                             canSelectFolders: false,
                             canSelectMany: false,
                             openLabel: `Append ${label}`,
                             title: `Select file to append ${label}`,
-                            defaultUri
+                            defaultUri,
                         });
 
                         if (fileUris && fileUris.length > 0) {
                             targetPath = fileUris[0].fsPath;
                             // Update history
-                            await context.workspaceState.update(stateKey, targetPath);
+                            await context.workspaceState.update(
+                                stateKey,
+                                targetPath
+                            );
                         }
                     }
 
                     if (targetPath) {
                         try {
-                            const fs = require('fs');
+                            const fs = require("fs");
                             let fileContent = "";
                             if (fs.existsSync(targetPath)) {
-                                fileContent = fs.readFileSync(targetPath, 'utf8');
+                                fileContent = fs.readFileSync(
+                                    targetPath,
+                                    "utf8"
+                                );
                             }
-                            
-                            const newImports = await getImportsForContent(content, targetPath, fileContent);
+
+                            const newImports = await getImportsForContent(
+                                content,
+                                targetPath,
+                                fileContent
+                            );
                             let finalContent = fileContent;
-                            
+
                             if (newImports.length > 0) {
-                                finalContent = newImports.join('\n') + "\n\n" + finalContent;
+                                finalContent =
+                                    newImports.join("\n") +
+                                    "\n\n" +
+                                    finalContent;
                             }
-                            
+
                             finalContent += "\n\n" + content;
-                            
+
                             fs.writeFileSync(targetPath, finalContent);
-                            vscode.window.showInformationMessage(`Appended ${label} to ${vscode.workspace.asRelativePath(targetPath)}`);
+                            vscode.window.showInformationMessage(
+                                `Appended ${label} to ${vscode.workspace.asRelativePath(
+                                    targetPath
+                                )}`
+                            );
                         } catch (err) {
-                            vscode.window.showErrorMessage(`Failed to write to file: ${err}`);
+                            vscode.window.showErrorMessage(
+                                `Failed to write to file: ${err}`
+                            );
                         }
                     }
                 };
 
                 // Ask for each part with unique state keys
-                if (generated.model) await appendToFile(generated.model, "Model/Types", "lastPath_model");
-                if (generated.api) await appendToFile(generated.api, "API Function", "lastPath_api");
-                if (generated.queryKey) await appendToFile(generated.queryKey, "Query Key", "lastPath_queryKey");
-                if (generated.hook) await appendToFile(generated.hook, "Hook", "lastPath_hook");
-
+                if (generated.model) {
+                    await appendToFile(
+                        generated.model,
+                        "Model/Types",
+                        "lastPath_model"
+                    );
+                }
+                if (generated.api) {
+                    await appendToFile(
+                        generated.api,
+                        "API Function",
+                        "lastPath_api"
+                    );
+                }
+                if (generated.queryKey) {
+                    await appendToFile(
+                        generated.queryKey,
+                        "Query Key",
+                        "lastPath_queryKey"
+                    );
+                }
+                if (generated.hook) {
+                    await appendToFile(generated.hook, "Hook", "lastPath_hook");
+                }
             } catch (e) {
                 vscode.window.showErrorMessage("Error generating files: " + e);
             }
