@@ -3,8 +3,7 @@
 import * as vscode from "vscode";
 import { generateFiles, generateBatchModels } from "./lib/generateFiles";
 import { getImportsForContent } from "./resolveImports";
-import SwaggerParser from "@apidevtools/swagger-parser";
-import * as prettier from "prettier";
+import prettier from 'prettier'
 
 export function activate(context: vscode.ExtensionContext) {
     console.log("React Query Hook Builder is now active!");
@@ -57,23 +56,68 @@ export function activate(context: vscode.ExtensionContext) {
             }
         }
 
-        // If no target path set (either no history or user chose 'new'), show dialog
+        // If no target path set (either no history or user chose 'new'), show directory picker
         if (!targetPath) {
-            const defaultUri = lastPath ? vscode.Uri.file(lastPath) : undefined;
-            const fileUris = await vscode.window.showOpenDialog({
-                canSelectFiles: true,
-                canSelectFolders: false,
-                canSelectMany: false,
-                openLabel: `Append ${label}`,
-                title: `Select file to append ${label}`,
-                defaultUri,
-            });
+             // Custom QuickPick for file navigation
+             const pickFile = async (currentDir: string): Promise<string | undefined> => {
+                try {
+                    const fs = require('fs');
+                    const path = require('path');
+                    const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+                    
+                    const items: vscode.QuickPickItem[] = [];
+                    
+                    // Add ".." option if not at root of drive/workspace (heuristic)
+                    const parentDir = path.dirname(currentDir);
+                    if (parentDir !== currentDir) {
+                        items.push({ label: "$(folder) ..", description: "Go up", detail: parentDir });
+                    }
 
-            if (fileUris && fileUris.length > 0) {
-                targetPath = fileUris[0].fsPath;
-                // Update history
-                await context.workspaceState.update(stateKey, targetPath);
-            }
+                    // Sort: Directories first, then files
+                    const dirs = entries.filter((e: any) => e.isDirectory()).sort((a: any, b: any) => a.name.localeCompare(b.name));
+                    const files = entries.filter((e: any) => e.isFile()).sort((a: any, b: any) => a.name.localeCompare(b.name));
+
+                    for (const d of dirs) {
+                        items.push({ label: `$(folder) ${d.name}`, description: "Folder", detail: path.join(currentDir, d.name) });
+                    }
+                    for (const f of files) {
+                        items.push({ label: `$(file) ${f.name}`, description: "File", detail: path.join(currentDir, f.name) });
+                    }
+
+                    const selection = await vscode.window.showQuickPick(items, {
+                        placeHolder: `Select file in ${currentDir}`,
+                        ignoreFocusOut: true
+                    });
+
+                    if (!selection) return undefined;
+
+                    const selectedPath = selection.detail!;
+                    // If directory/up, recurse
+                    if (selection.label.startsWith("$(folder)")) {
+                        return pickFile(selectedPath);
+                    } else {
+                        return selectedPath;
+                    }
+                } catch (e) {
+                    vscode.window.showErrorMessage(`Error reading directory: ${e}`);
+                    return undefined;
+                }
+             };
+
+             // Start picking from workspace root or last path's dir
+             let startDir = vscode.workspace.workspaceFolders?.[0].uri.fsPath;
+             if (lastPath) {
+                 const path = require('path');
+                 startDir = path.dirname(lastPath);
+             }
+             
+             if (startDir) {
+                 targetPath = await pickFile(startDir);
+                 if (targetPath) {
+                     // Update history
+                     await context.workspaceState.update(stateKey, targetPath);
+                 }
+             }
         }
 
         if (targetPath) {
@@ -114,6 +158,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     const formatCode = async (code: string): Promise<string> => {
         try {
+            const prettier = await import("prettier");
             // Try to resolve prettier config from workspace
             const workspaceFolders = vscode.workspace.workspaceFolders;
             let options: prettier.Options = { parser: "typescript" };
@@ -223,6 +268,38 @@ export function activate(context: vscode.ExtensionContext) {
         }
     );
 
+    const enrichSchemaTitles = (schema: any, baseName: string, visited = new Set<any>()) => {
+        if (!schema || typeof schema !== 'object') return;
+        if (visited.has(schema)) return;
+        visited.add(schema);
+
+        // Force overwrite title to ensure semantic naming based on context (Feature/Endpoint)
+        // This prevents generic names like "Data", "Response" or collisions "Data1"
+        schema.title = baseName;
+        
+        if (schema.properties) {
+            for (const key of Object.keys(schema.properties)) {
+                const pascalKey = key.charAt(0).toUpperCase() + key.slice(1);
+                const prop = schema.properties[key];
+                
+                // Recurse for objects (properties/additionalProperties)
+                // Relaxed check: if it has properties, it's an object. 
+                if (prop.properties || prop.additionalProperties) {
+                    enrichSchemaTitles(prop, `${baseName}${pascalKey}`, visited);
+                } 
+                // Recurse for arrays
+                else if (prop.items) {
+                    enrichSchemaTitles(prop.items, `${baseName}${pascalKey}Item`, visited);
+                }
+                // Handle unions (anyOf, oneOf, allOf) if necessary?
+                // Quicktype handles them, but we can try to title the options?
+            }
+        }
+        if (schema.additionalProperties && typeof schema.additionalProperties === 'object') {
+             enrichSchemaTitles(schema.additionalProperties, `${baseName}Value`, visited);
+        }
+    };
+
     let openApiDisposable = vscode.commands.registerCommand(
         "extension.generateHookFromOpenAPI",
         async () => {
@@ -269,6 +346,7 @@ export function activate(context: vscode.ExtensionContext) {
             try {
                 let spec: any;
                 const trimmedInput = input.trim();
+                const SwaggerParser = (await import("@apidevtools/swagger-parser")).default;
 
                 try {
                     // Normalize input for SwaggerParser
@@ -349,9 +427,20 @@ export function activate(context: vscode.ExtensionContext) {
                         featureName = parts.length > 0 ? parts[parts.length - 1] : 'feature';
                         featureName = method + featureName.charAt(0).toUpperCase() + featureName.slice(1);
                     }
+
+                    // Sanitize featureName
+                    featureName = featureName.replace(/[^a-zA-Z0-9]/g, "");
+                    if (/^\d/.test(featureName)) {
+                        featureName = `Api${featureName}`;
+                    }
+                    if (!featureName) {
+                        featureName = "ApiFeature";
+                    }
                     
                     // Determine Response Schema
                     let responseSchemaStr: string | undefined;
+                    let wrapperArgs: string | undefined;
+
                     // Since spec is dereferenced, we just look up the success response schema
                     const successCode = Object.keys(operation.responses || {}).find(code => code.startsWith('2'));
                     const successResponse = successCode ? operation.responses[successCode] : undefined;
@@ -359,8 +448,24 @@ export function activate(context: vscode.ExtensionContext) {
                     if (successResponse && successResponse.content?.["application/json"]?.schema) {
                         try {
                             const schema = successResponse.content["application/json"].schema;
-                            // Ensure valid schema for quicktype (might be circular, try/catch stringify)
-                            responseSchemaStr = JSON.stringify(schema);
+                            
+                            // Check for Wrapper Pattern (success + data)
+                            if (schema.type === 'object' && schema.properties && schema.properties.success && schema.properties.data) {
+                                 // Unwrap!
+                                 if (schema.properties.totalRecords || schema.properties.filteredRecords) {
+                                     wrapperArgs = "WithRecordResponse";
+                                 } else {
+                                     wrapperArgs = "WithResponse";
+                                 }
+                                 
+                                 const innerSchema = schema.properties.data;
+                                 enrichSchemaTitles(innerSchema, `${featureName}Data`);
+                                 responseSchemaStr = JSON.stringify(innerSchema);
+
+                            } else {
+                                 enrichSchemaTitles(schema, `${featureName}Response`);
+                                 responseSchemaStr = JSON.stringify(schema);
+                            }
                         } catch (e) {
                             console.warn("Failed to stringify response schema (circular ref?)", e);
                         }
@@ -410,6 +515,8 @@ export function activate(context: vscode.ExtensionContext) {
                              required: requiredParams
                          };
                          
+                         enrichSchemaTitles(fullParamSchema, `${featureName}Variables`);
+
                          try {
                             paramsSchemaStr = JSON.stringify(fullParamSchema);
                          } catch (e) {

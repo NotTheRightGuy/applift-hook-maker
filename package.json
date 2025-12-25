@@ -7,7 +7,7 @@
         "type": "git",
         "url": "https://github.com/NotTheRightGuy/react-query-hook-maker"
     },
-    "version": "0.0.2",
+    "version": "0.0.3",
     "engines": {
         "vscode": "^1.90.0"
     },
@@ -47,7 +47,7 @@
         "@types/node": "22.x",
         "@types/readable-stream": "^4.0.23",
         "@types/urijs": "^1.19.26",
-        "@types/vscode": "^1.107.0",
+        "@types/vscode": "^1.90.0",
         "@vscode/test-cli": "^0.0.12",
         "@vscode/test-electron": "^2.5.2",
         "esbuild": "^0.27.1",

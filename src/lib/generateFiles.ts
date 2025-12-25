@@ -1,5 +1,16 @@
 import { generateTypesFromJson, generateTypesFromSchema, generateTypesFromMultipleSchemas } from "./generateType";
 
+
+function getSafeVarName(key: string): string {
+    if (/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(key)) return key;
+    let safe = key.replace(/[-_\s]+(.)?/g, (_, c) => c ? c.toUpperCase() : '');
+    safe = safe.replace(/[^a-zA-Z0-9_$]/g, '');
+    if (/^\d/.test(safe)) safe = 'var' + safe;
+    const reserved = ['interface', 'class', 'let', 'var', 'const', 'import', 'export', 'type', 'switch', 'case', 'break', 'if', 'else', 'return', 'new', 'this', 'void', 'delete', 'catch', 'try', 'throw', 'typeof', 'instanceof', 'in', 'of', 'for', 'while', 'do', 'continue'];
+    if (reserved.includes(safe)) safe = '_' + safe;
+    return safe || 'variable';
+}
+
 interface GenerateFilesProps {
     featureName: string;
     methodType: string;
@@ -10,6 +21,7 @@ interface GenerateFilesProps {
     responseSchema?: string;
     paramsSchema?: string;
     skipModelGeneration?: boolean;
+    wrapperArgs?: string;
 }
 
 export interface GenerateFileResponse {
@@ -18,7 +30,6 @@ export interface GenerateFileResponse {
     api: string;
     hook: string;
 }
-
 export async function generateBatchModels(
     items: { featureName: string; responseSchema?: string; paramsSchema?: string }[]
 ): Promise<string> {
@@ -45,7 +56,6 @@ export async function generateBatchModels(
     if (sources.length === 0) return "";
     return generateTypesFromMultipleSchemas(sources);
 }
-
 export async function generateFiles(
     props: GenerateFilesProps
 ): Promise<GenerateFileResponse> {
@@ -58,13 +68,34 @@ export async function generateFiles(
         hookType,
         responseSchema,
         paramsSchema,
-        skipModelGeneration
+        skipModelGeneration,
+        wrapperArgs
     } = props;
+//...
+// (Skip to apiFunction generation)
+//
+
 
     const pascalName =
         featureName.charAt(0).toUpperCase() + featureName.slice(1);
     const camelName =
         featureName.charAt(0).toLowerCase() + featureName.slice(1);
+
+    const getUniqueVarMapping = (keys: string[]) => {
+         const mapping = keys.map(key => ({ key, safe: getSafeVarName(key) }));
+         const seen = new Set<string>();
+         for (const m of mapping) {
+             let s = m.safe;
+             let counter = 2;
+             while (seen.has(s)) {
+                s = `${m.safe}_${counter}`;
+                counter++;
+             }
+             m.safe = s;
+             seen.add(s);
+         }
+         return mapping;
+    };
 
     const parseJson = async (input: string): Promise<any> => {
         try {
@@ -191,14 +222,19 @@ export async function generateFiles(
     let variablesType = "any";
 
     // Normalize URL to use ${param} format for code generation
-    const processedApiUrl = apiUrl.replace(/(\$?)\{(\w+)\}/g, (match, prefix, varName) => `\${${varName}}`);
-    const urlVars = Array.from(processedApiUrl.matchAll(/\${(\w+)}/g)).map((m) => m[1]);
+    const processedApiUrl = apiUrl.replace(/(\$?)\{(\w+)\}/g, (match, prefix, varName) => `\${${getSafeVarName(varName)}}`);
+    const urlVars = Array.from(apiUrl.matchAll(/(\$?)\{(\w+)\}/g)).map((m) => m[2]);
 
     let paramsJson: Record<string, any> = {};
 
     if (params && params.trim()) {
         try {
-            paramsJson = await parseJson(params);
+            const parsed = await parseJson(params);
+            if (Array.isArray(parsed)) {
+                paramsJson = parsed[0] || {};
+            } else {
+                paramsJson = parsed;
+            }
         } catch (e) {
             throw new Error(
                 `Failed to parse params JSON: ${(e as Error).message}`
@@ -246,12 +282,14 @@ export async function generateFiles(
     if (variablesType !== "void" && variablesType !== "any") {
         const keys = Object.keys(paramsJson);
         if (keys.length > 0) {
-            apiArgsRaw = `{ ${keys.join(", ")} }`;
+            const mapping = getUniqueVarMapping(keys);
+            apiArgsRaw = `{ ${mapping.map(m => m.key === m.safe ? m.key : `${JSON.stringify(m.key)}: ${m.safe}`).join(", ")} }`;
             apiArgsTyped = `: ${variablesType}`;
         }
     } else if (urlVars.length > 0) {
-        apiArgsRaw = `{ ${urlVars.join(", ")} }`;
-        apiArgsTyped = `: { ${urlVars.map((v) => `${v}: any`).join("; ")} }`;
+        const mapping = getUniqueVarMapping(urlVars);
+        apiArgsRaw = `{ ${mapping.map(m => m.key === m.safe ? m.key : `${JSON.stringify(m.key)}: ${m.safe}`).join(", ")} }`;
+        apiArgsTyped = `: { ${urlVars.map((v) => `${JSON.stringify(v)}: any`).join("; ")} }`;
     }
 
     // If we have paramsSchema, we can't easily filter bodyParams vs urlVars without parsing schema
@@ -299,16 +337,26 @@ export async function generateFiles(
              allVars = [...new Set([...urlVars, ...Object.keys(paramsJson)])];
         }
 
+        const varMapping = allVars.map(key => ({ key, safe: getSafeVarName(key) }));
+        const destructureString = varMapping.length > 0 
+            ? varMapping.map(({key, safe}) => key === safe ? key : `${JSON.stringify(key)}: ${safe}`).join(", ")
+            : "";
+
         const destructureLine =
             allVars.length > 0
-                ? `  const { ${allVars.join(", ")} } = queryKey[0];`
+                ? `  const { ${destructureString} } = queryKey[0];`
                 : "";
 
         let axiosCall = "";
         const method = httpMethod;
         const dataVars = bodyParams;
-        const dataString =
-            dataVars.length > 0 ? `{ ${dataVars.join(", ")} }` : "{}";
+        
+        const dataString = dataVars.length > 0 
+             ? `{ ${dataVars.map(k => {
+                 const safe = getSafeVarName(k);
+                 return k === safe ? k : `${JSON.stringify(k)}: ${safe}`;
+             }).join(", ")} }` 
+             : "{}";
         
         // Handle pageParam for useInfiniteQuery
         let pageParamLogic = "";
@@ -325,8 +373,11 @@ export async function generateFiles(
                  // We can replace "pageNo" with "pageNo: pageNo ?? pageParam ?? 1" in the string if we build it manually
                  // Or we can rebuild the object string
                  const structVars = dataVars.map(v => {
-                     if (v === "pageNo") return "pageNo: pageNo ?? pageParam ?? 1";
-                     return v;
+                     const safe = getSafeVarName(v);
+                     const keyPart = v === safe ? v : `${JSON.stringify(v)}: ${safe}`;
+                     
+                     if (v === "pageNo") return `pageNo: ${safe} ?? pageParam ?? 1`;
+                     return keyPart;
                  });
                  const newDataString = `{ ${structVars.join(", ")} }`;
                  
@@ -357,11 +408,22 @@ export async function generateFiles(
              }
         }
 
+        let internalReturnType = apiReturnType;
+        let returnBlock = "return response.data;";
+        
+        if (wrapperArgs) {
+            internalReturnType = `${wrapperArgs}<${apiReturnType}>`;
+            returnBlock = `if (response.data.success !== true) {
+      return Promise.reject('Something went wrong!');
+    }
+    return response.data?.data;`;
+        }
+
         apiFunction = `export const ${apiFunctionName} = async (
   context: QueryFunctionContext<ReturnType<typeof ${queryKeyName}.keys>>
 ): Promise<${apiReturnType}> => {
   const { signal, queryKey } = context;
-  const { ${allVars.join(", ")} } = queryKey[0];
+  const { ${destructureString} } = queryKey[0];
 ${hookType === "useInfiniteQuery" ? "  const { pageParam } = context;" : ""}
 
   const { CancelToken } = axios;
@@ -371,9 +433,9 @@ ${hookType === "useInfiniteQuery" ? "  const { pageParam } = context;" : ""}
   });
 
   try {
-    const response: AxiosResponse<${apiReturnType}> =
+    const response: AxiosResponse<${internalReturnType}> =
       ${axiosCall};
-    return response.data;
+    ${returnBlock}
   } catch (e) {
     return Promise.reject(((e as any).response as AxiosResponse) ?? e);
   }
@@ -391,11 +453,22 @@ ${hookType === "useInfiniteQuery" ? "  const { pageParam } = context;" : ""}
             axiosCall = `await getInstance().${method}(\`${processedApiUrl}\`${dataString})`;
         }
 
+        let internalReturnType = apiReturnType;
+        let returnBlock = "return response.data;";
+        
+        if (wrapperArgs) {
+            internalReturnType = `${wrapperArgs}<${apiReturnType}>`;
+            returnBlock = `if (response.data.success !== true) {
+      return Promise.reject('Something went wrong!');
+    }
+    return response.data?.data;`;
+        }
+
         apiFunction = `export const ${apiFunctionName} = async (${apiArgsRaw}${apiArgsTyped}): Promise<${apiReturnType}> => {
   try {
-    const response: AxiosResponse<${apiReturnType}> =
+    const response: AxiosResponse<${internalReturnType}> =
       ${axiosCall};
-    return response.data;
+    ${returnBlock}
   } catch (e) {
     return Promise.reject((e as AxiosError).response ?? e);
   }
@@ -449,7 +522,8 @@ ${hookType === "useInfiniteQuery" ? "  const { pageParam } = context;" : ""}
         }
         
         if (allVars.length > 0) {
-           hookDestructure = `{ ${allVars.join(", ")}, options }`;
+           const mapping = getUniqueVarMapping(allVars);
+           hookDestructure = `{ ${mapping.map(m => m.key === m.safe ? m.key : `${JSON.stringify(m.key)}: ${m.safe}`).join(", ")}, options }`;
         } else {
            hookDestructure = `{ options }`;
         }
@@ -457,7 +531,8 @@ ${hookType === "useInfiniteQuery" ? "  const { pageParam } = context;" : ""}
         // Arguments for QueryKey.keys()
         let keysObject = `scope: '${camelName}'`;
         if (allVars.length > 0) {
-             keysObject += `, ${allVars.join(", ")}`;
+             const mapping = getUniqueVarMapping(allVars); // Re-gen mapping, identical result order
+             keysObject += `, ${mapping.map(m => m.key === m.safe ? m.key : `${JSON.stringify(m.key)}: ${m.safe}`).join(", ")}`;
         }
 
         const queryFn = apiFunctionName;
@@ -498,14 +573,16 @@ ${hookType === "useInfiniteQuery" ? "  const { pageParam } = context;" : ""}
          
          let hookDestructure = "";
          if (allVars.length > 0) {
-            hookDestructure = `{ ${allVars.join(", ")}, options }`;
+            const mapping = getUniqueVarMapping(allVars);
+            hookDestructure = `{ ${mapping.map(m => m.key === m.safe ? m.key : `${JSON.stringify(m.key)}: ${m.safe}`).join(", ")}, options }`;
          } else {
             hookDestructure = `{ options }`;
          }
  
          let keysObject = `scope: '${camelName}'`;
          if (allVars.length > 0) {
-              keysObject += `, ${allVars.join(", ")}`;
+              const mapping = getUniqueVarMapping(allVars);
+              keysObject += `, ${mapping.map(m => m.key === m.safe ? m.key : `${JSON.stringify(m.key)}: ${m.safe}`).join(", ")}`;
          }
  
          const queryFn = apiFunctionName;
