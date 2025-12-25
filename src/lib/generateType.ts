@@ -56,3 +56,29 @@ export async function generateTypesFromSchema(
 
     return result.lines.join("\n");
 }
+
+export async function generateTypesFromMultipleSchemas(
+    sources: { name: string; schema: string }[]
+) {
+    const schemaInput = new JSONSchemaInput(new FetchingJSONSchemaStore());
+
+    for (const source of sources) {
+        await schemaInput.addSource({
+            name: source.name,
+            schema: source.schema,
+        });
+    }
+
+    const inputData = new InputData();
+    inputData.addInput(schemaInput);
+
+    const result = await quicktype({
+        inputData,
+        lang: "typescript",
+        rendererOptions: {
+            "just-types": "true",
+        },
+    });
+
+    return result.lines.join("\n");
+}

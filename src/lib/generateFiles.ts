@@ -1,4 +1,4 @@
-import { generateTypesFromJson, generateTypesFromSchema } from "./generateType";
+import { generateTypesFromJson, generateTypesFromSchema, generateTypesFromMultipleSchemas } from "./generateType";
 
 interface GenerateFilesProps {
     featureName: string;
@@ -9,6 +9,7 @@ interface GenerateFilesProps {
     hookType: string;
     responseSchema?: string;
     paramsSchema?: string;
+    skipModelGeneration?: boolean;
 }
 
 export interface GenerateFileResponse {
@@ -16,6 +17,33 @@ export interface GenerateFileResponse {
     queryKey: string;
     api: string;
     hook: string;
+}
+
+export async function generateBatchModels(
+    items: { featureName: string; responseSchema?: string; paramsSchema?: string }[]
+): Promise<string> {
+    const sources: { name: string; schema: string }[] = [];
+
+    for (const item of items) {
+        const pascalName = item.featureName.charAt(0).toUpperCase() + item.featureName.slice(1);
+        
+        if (item.responseSchema) {
+            sources.push({
+                name: `${pascalName}Response`,
+                schema: item.responseSchema
+            });
+        }
+        
+        if (item.paramsSchema) {
+             sources.push({
+                name: `${pascalName}Variables`,
+                schema: item.paramsSchema
+            });
+        }
+    }
+
+    if (sources.length === 0) return "";
+    return generateTypesFromMultipleSchemas(sources);
 }
 
 export async function generateFiles(
@@ -30,6 +58,7 @@ export async function generateFiles(
         hookType,
         responseSchema,
         paramsSchema,
+        skipModelGeneration
     } = props;
 
     const pascalName =
@@ -65,18 +94,22 @@ export async function generateFiles(
     let apiReturnType = `${pascalName}Response`; // Default fallback
 
     if (responseSchema) {
-        try {
-            const typeName = `${pascalName}Response`;
-            responseModel = await generateTypesFromSchema(
-                responseSchema,
-                typeName
-            );
-            apiReturnType = typeName;
-        } catch (e) {
-             throw new Error(
-                `Failed to generate response types from schema: ${(e as Error).message}`
-            );
+        const typeName = `${pascalName}Response`;
+        if (!skipModelGeneration) {
+            try {
+                responseModel = await generateTypesFromSchema(
+                    responseSchema,
+                    typeName
+                );
+            } catch (e) {
+                 throw new Error(
+                    `Failed to generate response types from schema: ${(e as Error).message}`
+                );
+            }
+        } else {
+            responseModel = ""; // Skipped
         }
+        apiReturnType = typeName;
     } else if (exampleResponse && exampleResponse.trim()) {
         try {
             const parsed = await parseJson(exampleResponse);
@@ -99,11 +132,15 @@ export async function generateFiles(
                             featureName.slice(1) +
                             "Item";
 
-                        const generatedType = await generateTypesFromJson(
-                            itemExample,
-                            itemTypeName
-                        );
-                        responseModel = generatedType;
+                         if (!skipModelGeneration) {
+                            const generatedType = await generateTypesFromJson(
+                                itemExample,
+                                itemTypeName
+                            );
+                            responseModel = generatedType;
+                        } else {
+                            responseModel = "";
+                        }
 
                         if (arrayKey === 'data') {
                             apiReturnType = `WithRecordResponse<${itemTypeName}[]>`;
@@ -112,23 +149,35 @@ export async function generateFiles(
                         }
                     } else {
                         const typeName = `${pascalName}Data`;
-                        responseModel = await generateTypesFromJson(
-                            dataBlock,
-                            typeName
-                        );
+                        if (!skipModelGeneration) {
+                            responseModel = await generateTypesFromJson(
+                                dataBlock,
+                                typeName
+                            );
+                        } else {
+                            responseModel = "";
+                        }
                         apiReturnType = `WithResponse<${typeName}>`;
                     }
                 } else {
                     const typeName = `${pascalName}Response`;
-                    responseModel = await generateTypesFromJson(
-                        dataBlock,
-                        typeName
-                    );
+                     if (!skipModelGeneration) {
+                        responseModel = await generateTypesFromJson(
+                            dataBlock,
+                            typeName
+                        );
+                    } else {
+                        responseModel = "";
+                    }
                     apiReturnType = `WithResponse<${typeName}>`;
                 }
             } else {
                 const typeName = `${pascalName}Response`;
-                responseModel = await generateTypesFromJson(parsed, typeName);
+                if (!skipModelGeneration) {
+                    responseModel = await generateTypesFromJson(parsed, typeName);
+                } else {
+                    responseModel = "";
+                }
                 apiReturnType = typeName;
             }
         } catch (e) {
@@ -167,16 +216,20 @@ export async function generateFiles(
     let variablesDefinition = "";
     
     if (paramsSchema) {
-         variablesDefinition = await generateTypesFromSchema(
-            paramsSchema,
-            variablesInterfaceName
-        );
+         if (!skipModelGeneration) {
+            variablesDefinition = await generateTypesFromSchema(
+                paramsSchema,
+                variablesInterfaceName
+            );
+         }
         variablesType = variablesInterfaceName;
     } else if (Object.keys(paramsJson).length > 0) {
-        variablesDefinition = await generateTypesFromJson(
-            paramsJson,
-            variablesInterfaceName
-        );
+        if (!skipModelGeneration) {
+            variablesDefinition = await generateTypesFromJson(
+                paramsJson,
+                variablesInterfaceName
+            );
+        }
         variablesType = variablesInterfaceName;
     } else {
         variablesType = "void";

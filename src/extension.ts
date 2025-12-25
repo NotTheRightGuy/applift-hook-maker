@@ -1,8 +1,10 @@
 // The module 'vscode' contains the VS Code extensibility API
 // Import the module and reference it with the alias vscode in your code below
 import * as vscode from "vscode";
-import { generateFiles } from "./lib/generateFiles";
+import { generateFiles, generateBatchModels } from "./lib/generateFiles";
 import { getImportsForContent } from "./resolveImports";
+import SwaggerParser from "@apidevtools/swagger-parser";
+import * as prettier from "prettier";
 
 export function activate(context: vscode.ExtensionContext) {
     console.log("React Query Hook Builder is now active!");
@@ -110,6 +112,26 @@ export function activate(context: vscode.ExtensionContext) {
         }
     };
 
+    const formatCode = async (code: string): Promise<string> => {
+        try {
+            // Try to resolve prettier config from workspace
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            let options: prettier.Options = { parser: "typescript" };
+            
+            if (workspaceFolders && workspaceFolders.length > 0) {
+                const configFile = await prettier.resolveConfig(workspaceFolders[0].uri.fsPath);
+                if (configFile) {
+                    options = { ...configFile, parser: "typescript" };
+                }
+            }
+            
+            return await prettier.format(code, options);
+        } catch (e) {
+            console.error("Prettier formatting failed", e);
+            return code;
+        }
+    };
+
     let disposable = vscode.commands.registerCommand(
         "extension.generateHook",
         async () => {
@@ -168,28 +190,32 @@ export function activate(context: vscode.ExtensionContext) {
 
                 // Ask for each part with unique state keys
                 if (generated.model) {
+                    const formatted = await formatCode(generated.model);
                     await appendToFile(
-                        generated.model,
+                        formatted,
                         "Model/Types",
                         "lastPath_model"
                     );
                 }
                 if (generated.api) {
+                   const formatted = await formatCode(generated.api);
                     await appendToFile(
-                        generated.api,
+                        formatted,
                         "API Function",
                         "lastPath_api"
                     );
                 }
                 if (generated.queryKey) {
+                    const formatted = await formatCode(generated.queryKey);
                     await appendToFile(
-                        generated.queryKey,
+                        formatted,
                         "Query Key",
                         "lastPath_queryKey"
                     );
                 }
                 if (generated.hook) {
-                    await appendToFile(generated.hook, "Hook", "lastPath_hook");
+                    const formatted = await formatCode(generated.hook);
+                    await appendToFile(formatted, "Hook", "lastPath_hook");
                 }
             } catch (e) {
                 vscode.window.showErrorMessage("Error generating files: " + e);
@@ -200,38 +226,40 @@ export function activate(context: vscode.ExtensionContext) {
     let openApiDisposable = vscode.commands.registerCommand(
         "extension.generateHookFromOpenAPI",
         async () => {
-            const lastInput = context.workspaceState.get<string>("lastOpenApiSpec");
+            const history = context.workspaceState.get<string[]>("openApiSpecHistory") || [];
             let input: string | undefined;
 
-            if (lastInput) {
-                const isUrl = lastInput.trim().startsWith("http");
-                const label = isUrl
-                    ? `Use last used URL: ${lastInput}`
-                    : `Use last used JSON content (${lastInput.substring(0, 50)}...)`;
-                
-                const selection = await vscode.window.showQuickPick(
-                    [
-                        { label: "$(history) " + label, description: "Reuse previous spec", picked: true, input: lastInput },
-                        { label: "$(edit) Enter new OpenAPI Spec URL or JSON content", description: "Input new spec", input: undefined }
-                    ],
-                    { placeHolder: "Select OpenAPI source" }
-                );
+            const historyItems: vscode.QuickPickItem[] = history.map((spec) => {
+                 const isUrl = spec.trim().startsWith("http");
+                 return {
+                     label: isUrl ? `$(globe) ${spec}` : `$(json) JSON Content (substring)`,
+                     description: isUrl ? "URL" : spec.substring(0, 50) + "...",
+                     detail: "From History",
+                     picked: false,
+                     input: spec
+                 } as vscode.QuickPickItem & { input: string };
+            });
 
-                if (!selection) return;
+            const newSpecItem = {
+                label: `$(plus) Enter new OpenAPI Spec URL or JSON content`,
+                description: "Input new spec",
+                input: undefined
+            };
 
-                if (selection.input === undefined) {
-                     input = await vscode.window.showInputBox({
-                        prompt: "Enter OpenAPI Spec URL or Paste JSON content",
-                        ignoreFocusOut: true,
-                    });
-                } else {
-                    input = selection.input;
-                }
-            } else {
-                 input = await vscode.window.showInputBox({
+            const selection = await vscode.window.showQuickPick(
+                [newSpecItem, ...historyItems],
+                { placeHolder: "Select OpenAPI source" }
+            );
+
+            if (!selection) return;
+
+            if ((selection as any).input === undefined) {
+                    input = await vscode.window.showInputBox({
                     prompt: "Enter OpenAPI Spec URL or Paste JSON content",
                     ignoreFocusOut: true,
                 });
+            } else {
+                input = (selection as any).input;
             }
 
             if (!input) {
@@ -242,18 +270,20 @@ export function activate(context: vscode.ExtensionContext) {
                 let spec: any;
                 const trimmedInput = input.trim();
 
-                if (trimmedInput.startsWith("http://") || trimmedInput.startsWith("https://")) {
-                     const response = await fetch(trimmedInput);
-                    if (!response.ok) {
-                        throw new Error(`Failed to fetch OpenAPI spec: ${response.statusText}`);
+                try {
+                    // Normalize input for SwaggerParser
+                    if (trimmedInput.startsWith("{")) {
+                        // If it looks like JSON object, parse it first
+                        const jsonInput = JSON.parse(trimmedInput);
+                        spec = await SwaggerParser.dereference(jsonInput);
+                    } else {
+                        // Assume URL or file path
+                        spec = await SwaggerParser.dereference(trimmedInput);
                     }
-                    spec = (await response.json()) as any;
-                } else {
-                    try {
-                        spec = JSON.parse(trimmedInput);
-                    } catch (e) {
-                        throw new Error("Input is neither a valid URL nor a valid JSON string.");
-                    }
+                } catch (e) {
+                     // Fallback/Retry logic could go here, but for now we error out or try bundle?
+                     // Let's try to parse as JSON if it failed and didn't start with { (maybe user pasted json without braces? unlikely)
+                     throw new Error(`Failed to parse/dereference spec: ${(e as any).message}`);
                 }
 
                 if (!spec.paths) {
@@ -261,7 +291,10 @@ export function activate(context: vscode.ExtensionContext) {
                 }
 
                 // Save to history if valid
-                await context.workspaceState.update("lastOpenApiSpec", input);
+                let newHistory = history.filter(h => h !== input);
+                newHistory.unshift(input);
+                if (newHistory.length > 10) newHistory = newHistory.slice(0, 10);
+                await context.workspaceState.update("openApiSpecHistory", newHistory);
 
                 const items: (vscode.QuickPickItem & {
                     path: string;
@@ -283,178 +316,172 @@ export function activate(context: vscode.ExtensionContext) {
                     }
                 }
 
-                const selected = await vscode.window.showQuickPick(items, {
-                    placeHolder: "Select Endpoint to generate hook for",
+                const selectedItems = await vscode.window.showQuickPick(items, {
+                    placeHolder: "Select Endpoint(s) to generate hook for",
                     ignoreFocusOut: true,
                     matchOnDetail: true,
                     matchOnDescription: true,
+                    canPickMany: true
                 });
 
-                if (!selected) {
+                if (!selectedItems || selectedItems.length === 0) {
                     return;
                 }
 
-                const { path, method, operation } = selected;
-                
-                // Determine Feature Name
-                let defaultFeatureName = operation.operationId;
-                if (!defaultFeatureName) {
-                    // fallback to path parts
-                    const parts = path.split('/').filter(p => p && !p.startsWith('{'));
-                    defaultFeatureName = parts.length > 0 ? parts[parts.length - 1] : 'feature';
-                    defaultFeatureName = method + defaultFeatureName.charAt(0).toUpperCase() + defaultFeatureName.slice(1);
-                }
+                const generatedResults = {
+                    model: [] as string[],
+                    api: [] as string[],
+                    queryKey: [] as string[],
+                    hook: [] as string[]
+                };
 
-                const featureName = await vscode.window.showInputBox({
-                    prompt: "Enter feature name",
-                    value: defaultFeatureName,
-                    ignoreFocusOut: true
-                });
+                const batchModelsInput: { featureName: string; responseSchema?: string; paramsSchema?: string }[] = [];
+                const processedItems: any[] = []; // To store computed schemas for 2nd pass
 
-                if (!featureName) return;
-
-                // Determine Response Schema
-                let responseSchemaStr: string | undefined;
-                const successCode = Object.keys(operation.responses || {} as Record<string, any>).find(code => code.startsWith('2'));
-                const successResponse = successCode ? operation.responses[successCode] : undefined;
-                
-                if (successResponse) {
-                    const schema = successResponse.content?.["application/json"]?.schema;
-                    if (schema) {
-                        // Construct synthetic schema with components
-                        const fullSchema: any = {
-                             $schema: "http://json-schema.org/draft-07/schema#",
-                             ...schema
-                        };
-                        
-                        if (spec.components) {
-                            fullSchema.components = spec.components;
-                        }
-                        if (spec.definitions) {
-                            fullSchema.definitions = spec.definitions;
-                        }
-                        responseSchemaStr = JSON.stringify(fullSchema);
-                    }
-                }
-                
-                let exampleResponse = "";
-                if (!responseSchemaStr) {
-                    const selection = await vscode.window.showQuickPick(
-                        ["Yes", "No"],
-                        { placeHolder: "No response schema found. Paste example JSON response?" }
-                    );
+                for (const selected of selectedItems) {
+                    const { path, method, operation } = selected;
                     
-                    if (selection === "Yes") {
-                        exampleResponse = await vscode.window.showInputBox({
-                            prompt: "Enter example JSON response",
-                            ignoreFocusOut: true
-                        }) || "";
+                    // Determine Feature Name
+                    let featureName = operation.operationId;
+                    if (!featureName) {
+                        // fallback to path parts
+                        const parts = path.split('/').filter(p => p && !p.startsWith('{'));
+                        featureName = parts.length > 0 ? parts[parts.length - 1] : 'feature';
+                        featureName = method + featureName.charAt(0).toUpperCase() + featureName.slice(1);
                     }
-                }
-
-                // Determine Params Schema
-                let paramsSchemaStr: string | undefined;
-                // Merge parameters and requestBody
-                const paramsProperties: Record<string, any> = {};
-                const requiredParams: string[] = [];
-
-                if (operation.parameters) {
-                    for (const param of operation.parameters) {
-                        if (param.in === "query" || param.in === "path") {
-                            paramsProperties[param.name] = param.schema || {}; // Handle simple schema
-                            if (param.required) {
-                                requiredParams.push(param.name);
-                            }
+                    
+                    // Determine Response Schema
+                    let responseSchemaStr: string | undefined;
+                    // Since spec is dereferenced, we just look up the success response schema
+                    const successCode = Object.keys(operation.responses || {}).find(code => code.startsWith('2'));
+                    const successResponse = successCode ? operation.responses[successCode] : undefined;
+                    
+                    if (successResponse && successResponse.content?.["application/json"]?.schema) {
+                        try {
+                            const schema = successResponse.content["application/json"].schema;
+                            // Ensure valid schema for quicktype (might be circular, try/catch stringify)
+                            responseSchemaStr = JSON.stringify(schema);
+                        } catch (e) {
+                            console.warn("Failed to stringify response schema (circular ref?)", e);
                         }
                     }
-                }
-
-                if (operation.requestBody) {
-                    let bodySchema = operation.requestBody.content?.["application/json"]?.schema;
                     
-                    if (bodySchema) {
-                        // Resolve Reference if needed
-                        if (bodySchema.$ref) {
-                             const refPath = bodySchema.$ref;
-                             // Basic resolution for #/components/schemas/Name or #/definitions/Name
-                             const parts = refPath.split('/');
-                             if (parts.length >= 3) {
-                                 const name = parts[parts.length - 1];
-                                 if (spec.components?.schemas?.[name]) {
-                                     bodySchema = spec.components.schemas[name];
-                                 } else if (spec.definitions?.[name]) {
-                                     bodySchema = spec.definitions[name];
+                    // Determine Params Schema
+                    let paramsSchemaStr: string | undefined;
+                    const paramsProperties: Record<string, any> = {};
+                    const requiredParams: string[] = [];
+
+                    // Parameters (query, path)
+                    if (operation.parameters) {
+                        for (const param of operation.parameters) {
+                             if (param.in === "query" || param.in === "path") {
+                                 // schema is already dereferenced
+                                 paramsProperties[param.name] = param.schema || {}; 
+                                 if (param.required) {
+                                     requiredParams.push(param.name);
                                  }
                              }
                         }
+                    }
 
-                        if (bodySchema.type === "object" && bodySchema.properties) {
-                             Object.assign(paramsProperties, bodySchema.properties);
-                             if (bodySchema.required) {
-                                 requiredParams.push(...bodySchema.required);
+                    // Request Body
+                    if (operation.requestBody) {
+                         const bodyContent = operation.requestBody.content?.["application/json"];
+                         if (bodyContent && bodyContent.schema) {
+                             const bodySchema = bodyContent.schema;
+                             
+                             if (bodySchema.type === "object" && bodySchema.properties) {
+                                  Object.assign(paramsProperties, bodySchema.properties);
+                                  if (bodySchema.required) {
+                                      requiredParams.push(...bodySchema.required);
+                                  }
+                             } else {
+                                 paramsProperties['body'] = bodySchema;
+                                 requiredParams.push('body');
                              }
-                        } else {
-                            paramsProperties['body'] = bodySchema;
-                            requiredParams.push('body');
-                        }
+                         }
                     }
+
+                    if (Object.keys(paramsProperties).length > 0) {
+                         const fullParamSchema: any = {
+                             $schema: "http://json-schema.org/draft-07/schema#",
+                             type: "object",
+                             properties: paramsProperties,
+                             required: requiredParams
+                         };
+                         
+                         try {
+                            paramsSchemaStr = JSON.stringify(fullParamSchema);
+                         } catch (e) {
+                             console.warn("Failed to stringify params schema", e);
+                         }
+                    }
+
+                    batchModelsInput.push({
+                        featureName,
+                        responseSchema: responseSchemaStr,
+                        paramsSchema: paramsSchemaStr
+                    });
+
+                    processedItems.push({
+                         featureName,
+                         method,
+                         path,
+                         responseSchemaStr,
+                         paramsSchemaStr
+                    });
                 }
 
-                if (Object.keys(paramsProperties).length > 0) {
-                     const fullParamSchema: any = {
-                         $schema: "http://json-schema.org/draft-07/schema#",
-                         type: "object",
-                         properties: paramsProperties,
-                         required: requiredParams
-                     };
+                // Generate Common/Batch Models
+                const commonModels = await generateBatchModels(batchModelsInput);
+                if (commonModels) {
+                    generatedResults.model.push(commonModels);
+                }
+                
+                // 2nd Pass: Generate API/Hook (Skipping model gen)
+                for (const item of processedItems) {
+                    const { featureName, method, path, responseSchemaStr, paramsSchemaStr } = item;
                      
-                     if (spec.components) {
-                        fullParamSchema.components = spec.components;
-                     }
-                     if (spec.definitions) {
-                        fullParamSchema.definitions = spec.definitions;
-                     }
-
-                     paramsSchemaStr = JSON.stringify(fullParamSchema);
-                }
-
-                // Select Hook Type
-                const defaultHookType = (method.toLowerCase() === 'get') ? 'useQuery' : 'useMutation';
-                // Move default to top
-                const hookTypes = ["useQuery", "useMutation", "useInfiniteQuery"].sort((a,b) => (a === defaultHookType ? -1 : 1));
-
-                const hookType = await vscode.window.showQuickPick(
-                    hookTypes,
-                    {
-                        placeHolder: `Select Hook Type (Recommended: ${defaultHookType})`,
+                    const hookType = (method.toLowerCase() === 'get') ? 'useQuery' : 'useMutation';
+                    
+                    let adjustedPath = path;
+                    if (adjustedPath.startsWith("/api")) {
+                        adjustedPath = adjustedPath.substring(4); 
                     }
-                );
-                
-                if (!hookType) return;
-                
-                const generated = await generateFiles({
-                    featureName,
-                    methodType: method.toUpperCase(),
-                    apiUrl: path,
-                    exampleResponse: exampleResponse,
-                    params: "",
-                    responseSchema: responseSchemaStr,
-                    paramsSchema: paramsSchemaStr,
-                    hookType,
-                });
 
-                // Append Logic
-                if (generated.model) {
-                    await appendToFile(generated.model, "Model/Types", "lastPath_model");
+                    const generated = await generateFiles({
+                        featureName,
+                        methodType: method.toUpperCase(),
+                        apiUrl: adjustedPath,
+                        exampleResponse: "",
+                        params: "",
+                        responseSchema: responseSchemaStr,
+                        paramsSchema: paramsSchemaStr,
+                        hookType,
+                        skipModelGeneration: true
+                    });
+
+                    if (generated.api) generatedResults.api.push(generated.api);
+                    if (generated.queryKey) generatedResults.queryKey.push(generated.queryKey);
+                    if (generated.hook) generatedResults.hook.push(generated.hook);
                 }
-                if (generated.api) {
-                    await appendToFile(generated.api, "API Function", "lastPath_api");
+
+                // Append Logic with Formatting
+                if (generatedResults.model.length > 0) {
+                    const formatted = await formatCode(generatedResults.model.join("\n\n"));
+                    await appendToFile(formatted, "Model/Types", "lastPath_model");
                 }
-                if (generated.queryKey) {
-                    await appendToFile(generated.queryKey, "Query Key", "lastPath_queryKey");
+                if (generatedResults.api.length > 0) {
+                    const formatted = await formatCode(generatedResults.api.join("\n\n"));
+                    await appendToFile(formatted, "API Function", "lastPath_api");
                 }
-                if (generated.hook) {
-                    await appendToFile(generated.hook, "Hook", "lastPath_hook");
+                if (generatedResults.queryKey.length > 0) {
+                    const formatted = await formatCode(generatedResults.queryKey.join("\n\n"));
+                    await appendToFile(formatted, "Query Key", "lastPath_queryKey");
+                }
+                if (generatedResults.hook.length > 0) {
+                    const formatted = await formatCode(generatedResults.hook.join("\n\n"));
+                    await appendToFile(formatted, "Hook", "lastPath_hook");
                 }
 
             } catch (e) {
